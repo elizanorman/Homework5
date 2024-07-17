@@ -1,0 +1,227 @@
+---
+title: "HW5"
+format: html
+editor: visual
+author: Eliza Norman
+---
+
+# Task 1: Conceptual Questions
+
+## 1. What is the purpose of using cross-validation when fitting a random forest model?
+
+We use cross-validation and split the data into training and test sets to make sure that the model that we fit will work well on future datasets.
+
+## 2. Describe the bagged tree algorithm.
+
+1. Create a bootstrap sample that has the same size (n) as the actual sample
+
+2. Train the tree on this bootstrap sample, i.e. get 1 predicted y value using given x values in this sample.
+
+3. Repeat this process B = 1000 times, so you will have B predicted values, each from samples of size n.
+
+4. Then the final prediction is the average of the B predicted y values.
+
+## 3. What is meant by a general linear model?
+
+A general linear model takes continuous response values, and it can have continuous and categorical predictors.
+
+## 4. When fitting a multiple linear regression model, what does adding an interaction term do? That is, what does it allow the model to do differently as compared to when it is not included in the model?
+
+An interaction term captures the combined effect of the interacting predictors, so it can help model that one predictor may affect the response in different ways, depending on the level of another predictor. It allows the model to not assume that the effects of each predictor on the response are independent of the levels of another predictor.
+
+## 5. Why do we split our data into a training and test set?
+
+We use the training data to fit an adequate model, and then we use the test data as "unseen" data to make sure that the model performs well.
+
+# Task 2: Fitting Models
+
+## Quick EDA/Data Preparation
+
+```{r}
+#| echo: false
+#| warning: false
+
+library(ggplot2)
+library(tidyverse)
+library(caret)
+```
+
+1. Quickly understand your data. Check on missingness and summarize the data, especially with respect to the relationships of the variables to HeartDisease.
+
+
+```{r}
+heartData <- read.csv("heart.csv")
+missingVars <- colSums(is.na(heartData))
+print(missingVars)
+```
+We can see here that no data is missing for any of the variables.
+
+# Do tables for categorical vars!
+
+```{r}
+summary(heartData)
+```
+
+
+2. Create a new variable that is a factor version of the HeartDisease variable (if needed, this depends on how you read in your data). Remove the ST_Slope variable and the original HeartDisease variable.
+
+
+```{r}
+newHeartData <- heartData |>
+  mutate(haveHeartDisease = as.factor(HeartDisease)) |>
+  select(-c(ST_Slope, HeartDisease))
+```
+
+
+3. Creating dummy variables for the categorical predictors, and bind the new columns to the dataset
+
+```{r}
+dummies <- dummyVars( ~ Sex + ExerciseAngina + ChestPainType + RestingECG, data = newHeartData)
+predictions <- predict(dummies, newdata = newHeartData)
+
+newHeartData <- cbind(newHeartData, predictions)
+```
+
+## Split your Data
+
+Here, I subset to only numeric data for the kNN modeling that I will do next. Then I split this subset into training and test data
+
+```{r}
+set.seed(50)
+onlyNumericVars <- newHeartData |>
+  select(where(is.numeric), haveHeartDisease)
+
+onlyNumericVars$haveHeartDisease <- droplevels(onlyNumericVars$haveHeartDisease)
+
+diseaseIndex <- createDataPartition(onlyNumericVars$haveHeartDisease, p = 0.8, list = FALSE)
+trainData <- onlyNumericVars[diseaseIndex, ]
+testData <- onlyNumericVars[-diseaseIndex, ]
+```
+
+## kNN
+
+Fit a kNN model using all the numeric variables as predictors and then used 10-fold cross validation, with 3 repeats. The tuning parameter k can take values 1,2,...,40 
+
+```{r}
+trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+knn_fit <- train(haveHeartDisease ~ ., data = trainData, 
+                 method = "knn",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"),
+                 tuneGrid = expand.grid(k = 1:40))
+```
+
+Checking the accuracy with confusionMatrix()
+
+```{r}
+confusionMatrix(data=testData$haveHeartDisease, reference = predict(knn_fit, newdata = testData))
+```
+
+## Logistic Regression
+
+First I split the data into training and test sets, this time with all of the predictors present in the datasets.
+
+```{r}
+set.seed(50)
+newHeartData$haveHeartDisease <- droplevels(newHeartData$haveHeartDisease)
+
+diseaseIndexLog <- createDataPartition(newHeartData$haveHeartDisease, p = 0.8, list = FALSE)
+trainDataLog <- newHeartData[diseaseIndexLog, ]
+testDataLog <- newHeartData[-diseaseIndexLog, ]
+
+```
+
+
+Model 1:
+
+```{r}
+logFit1 <- train(haveHeartDisease ~ Age + Sex + Cholesterol, data = trainDataLog, 
+                 method = "glm",
+                 family = "binomial",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"))
+logFit1
+```
+
+Model 2:
+
+```{r}
+logFit2 <- train(haveHeartDisease ~ Age + RestingBP + MaxHR + Cholesterol, data = trainDataLog, 
+                 method = "glm",
+                 family = "binomial",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"))
+logFit2
+```
+
+Model 3:
+
+```{r}
+logFit3 <- train(haveHeartDisease ~ Age + RestingBP + MaxHR + Cholesterol + FastingBS, data = trainDataLog, 
+                 method = "glm",
+                 family = "binomial",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"))
+logFit3
+summary(logFit3)
+```
+
+Check Accuracy of Model 3:
+
+```{r}
+confusionMatrix(data=testDataLog$haveHeartDisease, reference = predict(logFit3, newdata = testDataLog))
+```
+
+
+## Tree Models
+
+Classification Tree Model
+
+```{r}
+classTree <- train(haveHeartDisease ~ Age + RestingBP + MaxHR + Cholesterol + FastingBS, data = trainDataLog, 
+                 method = "rpart",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"),
+                 tuneGrid = expand.grid(cp = seq(0,0.1, by=0.001)))
+classTree
+```
+
+Random Forest Model
+
+```{r}
+randForest <- train(haveHeartDisease ~ Age + RestingBP + MaxHR + Cholesterol + FastingBS, data = trainDataLog, 
+                 method = "rf",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"),
+                 tuneGrid = data.frame(mtry = 1:5))
+randForest
+```
+
+Boosted Tree Model
+
+```{r}
+boosted <- train(haveHeartDisease ~ Age + RestingBP + MaxHR + Cholesterol + FastingBS, data = trainDataLog, 
+                 method = "gbm",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"),
+                 tuneGrid = expand.grid(n.trees = c(25,50,100,200),
+                                        interaction.depth = c(1,2,3),
+                                        shrinkage = 0.1,
+                                        n.minobsinnode = 10),
+                 verbose = FALSE)
+boosted
+```
+
+
+```{r}
+confusionMatrix(data=testDataLog$haveHeartDisease, reference = predict(classTree, newdata = testDataLog))
+
+confusionMatrix(data=testDataLog$haveHeartDisease, reference = predict(randForest, newdata = testDataLog))
+
+confusionMatrix(data=testDataLog$haveHeartDisease, reference = predict(boosted, newdata = testDataLog))
+```
+
+
+## Wrap up
+
+The random forest model had the highest accuracy at 71.6$\%$, based on the different confusionMatrix() outputs.
